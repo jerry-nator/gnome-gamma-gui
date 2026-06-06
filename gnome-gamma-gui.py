@@ -235,7 +235,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, app, backend_obj):
         super().__init__(application=app, title="GNOME Gamma GUI")
         self.backend = backend_obj
-        self.set_default_size(560, 720)
+        self.set_default_size(616, 720)
         self._job = None
         self._modal = None
         self._busy_values = None  # values being applied
@@ -352,23 +352,20 @@ class MainWindow(Gtk.ApplicationWindow):
         expander.set_child(adv_box)
         body.append(expander)
 
-        # save / load (also available in the menu) ----------------------------
-        sl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
-                         margin_top=6, homogeneous=True)
-        save_btn = Gtk.Button(label="Save profile…")
-        save_btn.connect("clicked", self.on_save)
-        load_btn = Gtk.Button(label="Load saved…")
-        load_btn.connect("clicked", self.on_load)
-        sl_row.append(save_btn)
-        sl_row.append(load_btn)
-        body.append(sl_row)
-
-        # footer --------------------------------------------------------------
+        # footer -- reset / save / load / apply (save & load also in the menu)
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10,
                          margin_top=6, margin_bottom=10, margin_start=14, margin_end=14)
-        reset_all = Gtk.Button(label="Reset all to neutral")
+        reset_all = Gtk.Button(label="Reset all")
         reset_all.connect("clicked", lambda *_: self.reset_all())
         footer.append(reset_all)
+
+        save_btn = Gtk.Button(label="Save")
+        save_btn.connect("clicked", self.on_save)
+        footer.append(save_btn)
+
+        load_btn = Gtk.Button(label="Load")
+        load_btn.connect("clicked", self.on_load)
+        footer.append(load_btn)
 
         self.status_lbl = Gtk.Label(xalign=0.0)
         self.status_lbl.add_css_class("dim-label")
