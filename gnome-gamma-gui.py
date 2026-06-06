@@ -150,7 +150,12 @@ class ApplyModal(Gtk.Window):
     """Modal whose Keep/Revert/timeout map onto the engine's prompt."""
 
     def __init__(self, parent, on_keep, on_revert):
-        super().__init__(title="Applying changes", transient_for=parent, modal=True)
+        # Deliberately NOT modal: a modal window dims/blocks the transient
+        # parent, which would hide how the freshly-applied profile actually
+        # looks. It still floats above the main window (transient_for) and
+        # can't be closed via the window controls (set_deletable(False)); the
+        # main window's Apply/display are locked for the duration anyway.
+        super().__init__(title="Applying changes", transient_for=parent, modal=False)
         self.set_default_size(380, -1)
         self.set_deletable(False)
         self._on_keep = on_keep
