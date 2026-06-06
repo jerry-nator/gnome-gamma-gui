@@ -29,6 +29,17 @@ import ggg_backend as backend  # noqa: E402
 APP_ID = "io.github.jerry_nator.GnomeGammaGui"
 
 
+def make_description(text):
+    """A small, italic, regular-weight helper label explaining a control."""
+    lbl = Gtk.Label(xalign=0.0)
+    lbl.set_wrap(True)
+    lbl.set_markup(f"<i>{GLib.markup_escape_text(text)}</i>")
+    lbl.add_css_class("caption")
+    lbl.add_css_class("dim-label")
+    lbl.set_margin_bottom(2)
+    return lbl
+
+
 # --------------------------------------------------------------------------- #
 # Reusable controls
 # --------------------------------------------------------------------------- #
@@ -88,7 +99,8 @@ class ChannelControl(Gtk.Box):
 class RGBControl(Gtk.Frame):
     """A titled group of three :class:`ChannelControl`s (R/G/B) + group reset."""
 
-    def __init__(self, title, lower, upper, step, neutral, digits, page=None):
+    def __init__(self, title, lower, upper, step, neutral, digits, page=None,
+                 description=None):
         super().__init__()
         self.neutral = neutral
 
@@ -108,6 +120,9 @@ class RGBControl(Gtk.Frame):
         group_reset.connect("clicked", lambda *_: self.reset())
         header.append(group_reset)
         outer.append(header)
+
+        if description:
+            outer.append(make_description(description))
 
         self.channels = []
         for name in ("R", "G", "B"):
@@ -259,6 +274,9 @@ class MainWindow(Gtk.ApplicationWindow):
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_vexpand(True)
+        # Persistent (non-overlay) scrollbar so the vertical scroll control
+        # stays visible whenever content runs below the fold.
+        scroller.set_overlay_scrolling(False)
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14,
                        margin_top=14, margin_bottom=14, margin_start=14, margin_end=14)
@@ -279,14 +297,21 @@ class MainWindow(Gtk.ApplicationWindow):
         self.baseline_lbl.set_wrap(True)
         body.append(self.baseline_lbl)
 
-        # controls ------------------------------------------------------------
-        self.gamma = RGBControl("Gamma", 0.1, 3.0, 0.01, 1.0, 2, page=0.1)
-        self.contrast = RGBControl("Contrast", -2.0, 2.0, 0.05, 1.0, 2, page=0.25)
-        self.brightness = RGBControl("Brightness (max)", 0.0, 1.0, 0.01, 1.0, 2, page=0.1)
-        self.min_brightness = RGBControl("Min brightness", 0.0, 1.0, 0.01, 0.0, 2, page=0.1)
-        for w in (self.gamma, self.contrast, self.brightness, self.min_brightness):
-            body.append(w)
+        # gamma + contrast (always visible, top of the window) ----------------
+        self.gamma = RGBControl(
+            "Gamma", 0.1, 3.0, 0.01, 1.0, 2, page=0.1,
+            description="Adjusts midtone brightness via a power curve. Lower "
+                        "values brighten midtones, higher values darken them. "
+                        "1.0 is neutral.")
+        self.contrast = RGBControl(
+            "Contrast", -2.0, 2.0, 0.05, 1.0, 2, page=0.25,
+            description="Spreads or compresses the tonal range. Below 1 reduces "
+                        "contrast; negative values invert the channel. Avoid 0, "
+                        "which makes the screen flat grey.")
+        body.append(self.gamma)
+        body.append(self.contrast)
 
+        # colour temperature --------------------------------------------------
         temp_frame = Gtk.Frame()
         temp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
                            margin_top=10, margin_bottom=10, margin_start=10, margin_end=10)
@@ -294,10 +319,44 @@ class MainWindow(Gtk.ApplicationWindow):
         temp_title.add_css_class("heading")
         temp_title.set_xalign(0.0)
         temp_box.append(temp_title)
+        temp_box.append(make_description(
+            "Warms or cools the whole image. Lower is warmer (redder), higher "
+            "is cooler (bluer). 6500 K is neutral."))
         self.temperature = ChannelControl("", 1000, 10000, 100, 6500, 0, page=500)
         temp_box.append(self.temperature)
         temp_frame.set_child(temp_box)
         body.append(temp_frame)
+
+        # brightness (advanced) -- collapsed by default -----------------------
+        self.brightness = RGBControl(
+            "Brightness (max)", 0.0, 1.0, 0.01, 1.0, 2, page=0.1,
+            description="Caps the maximum output level per channel. Can only "
+                        "dim the display, never brighten it. 1.0 is neutral.")
+        self.min_brightness = RGBControl(
+            "Min brightness", 0.0, 1.0, 0.01, 0.0, 2, page=0.1,
+            description="Raises the minimum output level, lifting blacks toward "
+                        "grey. 0.0 is neutral.")
+        adv_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14,
+                          margin_top=8)
+        adv_box.append(self.brightness)
+        adv_box.append(self.min_brightness)
+        expander = Gtk.Expander()
+        expander.set_use_markup(True)
+        expander.set_label("<b>Brightness (advanced)</b>")
+        expander.set_expanded(False)
+        expander.set_child(adv_box)
+        body.append(expander)
+
+        # save / load (also available in the menu) ----------------------------
+        sl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
+                         margin_top=6, homogeneous=True)
+        save_btn = Gtk.Button(label="Save profile…")
+        save_btn.connect("clicked", self.on_save)
+        load_btn = Gtk.Button(label="Load saved…")
+        load_btn.connect("clicked", self.on_load)
+        sl_row.append(save_btn)
+        sl_row.append(load_btn)
+        body.append(sl_row)
 
         # footer --------------------------------------------------------------
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10,
