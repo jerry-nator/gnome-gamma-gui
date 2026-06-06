@@ -16,17 +16,20 @@ See SPEC.md for the full design. This file is the UI; ggg_backend.py is the
 colord / engine-driving logic.
 """
 
+import os
 import sys
 
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk, GLib, Gio  # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, Gio  # noqa: E402
 
 import ggg_backend as backend  # noqa: E402
 
 
 APP_ID = "io.github.jerry_nator.GnomeGammaGui"
+APP_ICON = "gamma_sun_transparent"  # resolves via ICON_DIR on the icon theme path
+ICON_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def make_description(text):
@@ -234,6 +237,7 @@ class ApplyModal(Gtk.Window):
 class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, app, backend_obj):
         super().__init__(application=app, title="GNOME Gamma GUI")
+        self.set_icon_name(APP_ICON)
         self.backend = backend_obj
         self.set_default_size(616, 720)
         self._job = None
@@ -254,6 +258,7 @@ class MainWindow(Gtk.ApplicationWindow):
             ("redetect", self.on_redetect_baseline),
             ("removeall", self.on_remove_all),
             ("resetall", lambda *_: self.reset_all()),
+            ("about", self.on_about),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", handler)
@@ -270,6 +275,10 @@ class MainWindow(Gtk.ApplicationWindow):
         section.append("Re-detect baseline", "win.redetect")
         section.append("Remove all GUI profiles", "win.removeall")
         menu.append_section(None, section)
+
+        about_section = Gio.Menu()
+        about_section.append("About", "win.about")
+        menu.append_section(None, about_section)
 
         menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic")
         menu_btn.set_menu_model(menu)
@@ -681,6 +690,17 @@ class MainWindow(Gtk.ApplicationWindow):
         box.append(buttons)
         dialog.present()
 
+    def on_about(self, *_):
+        about = Gtk.AboutDialog(transient_for=self, modal=True)
+        about.set_program_name("GNOME Gamma GUI")
+        about.set_logo_icon_name(APP_ICON)
+        about.set_comments("A GTK front-end for gnome-gamma-tool: adjust gamma, "
+                           "contrast, brightness and colour temperature via a "
+                           "colord VCGT profile.")
+        about.set_website("https://github.com/jerry-nator/gnome-gamma-gui")
+        about.set_website_label("Project page")
+        about.present()
+
     def _error(self, message, detail):
         dlg = Gtk.AlertDialog()
         dlg.set_message(message)
@@ -699,6 +719,14 @@ class GammaGuiApp(Gtk.Application):
                          flags=Gio.ApplicationFlags.FLAGS_NONE)
         self._backend = None
 
+    def do_startup(self):
+        Gtk.Application.do_startup(self)
+        # Make the bundled PNG resolvable by name (APP_ICON) as an "unthemed"
+        # icon, so set_icon_name / set_logo_icon_name find it without install.
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.IconTheme.get_for_display(display).add_search_path(ICON_DIR)
+
     def do_activate(self):
         win = self.props.active_window
         if win:
@@ -716,6 +744,7 @@ class GammaGuiApp(Gtk.Application):
 
     def _fatal(self, detail):
         win = Gtk.ApplicationWindow(application=self, title="GNOME Gamma GUI")
+        win.set_icon_name(APP_ICON)
         win.set_default_size(420, -1)
         dlg = Gtk.AlertDialog()
         dlg.set_message("colord is not available")
