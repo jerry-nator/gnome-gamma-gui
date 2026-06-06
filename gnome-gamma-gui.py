@@ -437,6 +437,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _confirm_unsafe_contrast(self, values):
         dlg = Gtk.AlertDialog()
+        dlg.set_modal(False)
         dlg.set_message("Contrast is at (or near) zero")
         dlg.set_detail("A contrast of 0 makes the whole screen a flat grey. "
                        "Apply anyway?")
@@ -549,6 +550,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def on_remove_all(self, *_):
         idx = self._device_idx
         dlg = Gtk.AlertDialog()
+        dlg.set_modal(False)
         dlg.set_message("Remove all GUI-created profiles?")
         dlg.set_detail("This deletes every gnome-gamma-tool profile (including "
                        "saved ones' files) and returns the display to its "
@@ -611,7 +613,7 @@ class MainWindow(Gtk.ApplicationWindow):
             return
 
         names = [e["name"] for e in saved]
-        dialog = Gtk.Window(title="Load saved profile", transient_for=self, modal=True)
+        dialog = Gtk.Window(title="Load saved profile", transient_for=self, modal=False)
         dialog.set_default_size(320, -1)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
                       margin_top=16, margin_bottom=16, margin_start=16, margin_end=16)
@@ -652,7 +654,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # -- small dialogs --------------------------------------------------------
     def _text_entry_dialog(self, title, message, on_ok):
-        dialog = Gtk.Window(title=title, transient_for=self, modal=True)
+        dialog = Gtk.Window(title=title, transient_for=self, modal=False)
         dialog.set_default_size(320, -1)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
                       margin_top=16, margin_bottom=16, margin_start=16, margin_end=16)
@@ -683,6 +685,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _error(self, message, detail):
         dlg = Gtk.AlertDialog()
+        dlg.set_modal(False)
         dlg.set_message(message)
         dlg.set_detail(detail)
         dlg.set_buttons(["OK"])
@@ -718,6 +721,7 @@ class GammaGuiApp(Gtk.Application):
         win = Gtk.ApplicationWindow(application=self, title="GNOME Gamma GUI")
         win.set_default_size(420, -1)
         dlg = Gtk.AlertDialog()
+        dlg.set_modal(False)
         dlg.set_message("colord is not available")
         dlg.set_detail(
             detail + "\n\nThis tool only works on GNOME/Cinnamon with colord "
