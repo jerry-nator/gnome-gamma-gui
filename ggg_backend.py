@@ -212,6 +212,11 @@ class Backend:
         self.config = Config()
         if self.mgr.get_device_count() == 0:
             raise ColordError("No display devices found via colord.")
+        # Stable device ids (e.g. "xrandr-BOE-...") captured once. We re-fetch
+        # the live device proxy by id on every operation so we never read a
+        # stale profile list -- colord regenerates the EDID profile (new id)
+        # across reboots/session resets, and a cached snapshot would miss it.
+        self._device_ids = [d.get_id() for d in self.mgr.get_display_devices()]
 
     # devices -----------------------------------------------------------------
     def device_names(self):
@@ -220,40 +225,46 @@ class Backend:
     def device_count(self):
         return self.mgr.get_device_count()
 
-    def _device(self, idx):
-        return self.mgr.get_display_devices()[idx]
-
     def device_id(self, idx):
-        return self._device(idx).get_id()
+        return self._device_ids[idx]
 
-    # baseline ----------------------------------------------------------------
-    def detect_baseline(self, idx):
-        """Find the pristine (non-engine) profile for a device and persist it.
+    def _fresh_device(self, idx):
+        """Re-fetch a live device proxy by its stable id and connect it.
 
-        Walks *all* profiles associated with the device and returns the first one
-        that is not an engine-created profile -- so this is robust even when a
-        ``gnome-gamma-tool-`` profile is currently the active default.
-
-        Returns the colord profile id, or ``None`` if none could be identified.
+        Always returns colord's *current* view (profiles included), unlike the
+        snapshot the engine's ProfileMgr cached at startup. Falls back to the
+        cached device only if the re-fetch fails.
         """
-        device = self._device(idx)
+        dev_id = self._device_ids[idx]
+        try:
+            device = self.mgr.cd.find_device_sync(dev_id, None)
+            if device:
+                device.connect_sync()
+                return device
+        except Exception:
+            pass
+        device = self.mgr.get_display_devices()[idx]
+        device.connect_sync()
+        return device
+
+    @staticmethod
+    def _first_non_ours(device):
+        """First associated profile that is not an engine-created one (connected)."""
         for profile in (device.get_profiles() or []):
-            profile.connect_sync()
+            try:
+                profile.connect_sync()
+            except Exception:
+                continue
             if not _profile_is_ours(profile):
-                pid = profile.get_id()
-                self.config.set_baseline_id(self.device_id(idx), pid)
-                return pid
+                return profile
         return None
 
-    def baseline_id(self, idx, autodetect=True):
-        pid = self.config.get_baseline_id(self.device_id(idx))
-        if pid is None and autodetect:
-            pid = self.detect_baseline(idx)
-        return pid
-
-    def _find_profile_by_id(self, device, profile_id):
+    def _find_profile_in(self, device, profile_id):
         for profile in (device.get_profiles() or []):
-            profile.connect_sync()
+            try:
+                profile.connect_sync()
+            except Exception:
+                continue
             if profile.get_id() == profile_id:
                 return profile
         try:
@@ -265,44 +276,72 @@ class Backend:
             pass
         return None
 
-    def baseline_description(self, idx):
-        """Human-readable description of the stored baseline (for the UI)."""
-        pid = self.baseline_id(idx, autodetect=False)
-        if not pid:
+    # baseline ----------------------------------------------------------------
+    def detect_baseline(self, idx):
+        """Find the pristine (non-engine) profile for a display and persist it.
+
+        Reads colord fresh and returns the first associated profile that is not
+        an engine-created one -- robust even when a ``gnome-gamma-tool-`` profile
+        is currently the active default. Returns the colord profile id, or
+        ``None`` if no non-engine profile is associated with the display.
+        """
+        device = self._fresh_device(idx)
+        profile = self._first_non_ours(device)
+        if profile is None:
             return None
-        device = self._device(idx)
-        profile = self._find_profile_by_id(device, pid)
-        if not profile:
-            return pid
-        return profile.get_title() or profile.get_filename() or pid
+        pid = profile.get_id()
+        self.config.set_baseline_id(self._device_ids[idx], pid)
+        return pid
+
+    def baseline_id(self, idx, autodetect=True):
+        pid = self.config.get_baseline_id(self._device_ids[idx])
+        if pid is None and autodetect:
+            pid = self.detect_baseline(idx)
+        return pid
+
+    def baseline_description(self, idx):
+        """Human-readable description of the current baseline (for the UI)."""
+        device = self._fresh_device(idx)
+        profile = self._first_non_ours(device)
+        if profile is None:
+            return None
+        return profile.get_title() or profile.get_filename() or profile.get_id()
 
     def ensure_baseline_default(self, idx):
         """Make the pristine baseline the device default before an apply.
 
-        This is the "ensure no engine profile is the active default" operation:
-        once the baseline is default, the engine clones *it* rather than a
-        previously-applied (tinted) profile. Causes a brief flash-to-neutral.
+        Detects the baseline live (the non-engine profile currently associated
+        with the display) rather than trusting a remembered id, since colord can
+        renumber the EDID profile across sessions. Self-heals the stored id.
+        Causes a brief flash-to-neutral once it becomes the default.
         """
-        device = self._device(idx)
-        pid = self.baseline_id(idx)
-        if not pid:
-            raise ColordError(
-                "No pristine baseline profile is known for this display. "
-                "Try 'Re-detect baseline'."
-            )
-        profile = self._find_profile_by_id(device, pid)
-        if not profile:
-            raise ColordError(
-                "Stored baseline profile no longer exists. Try 'Re-detect baseline'."
-            )
+        device = self._fresh_device(idx)
         if not device.get_enabled():
             device.set_enabled_sync(True)
+            device = self._fresh_device(idx)
+
+        profile = self._first_non_ours(device)
+        if profile is None:
+            # Nothing but engine profiles are associated; try a remembered id as
+            # a last resort before giving up.
+            pid = self.config.get_baseline_id(self._device_ids[idx])
+            if pid:
+                profile = self._find_profile_in(device, pid)
+        if profile is None:
+            raise ColordError(
+                "No pristine baseline profile is associated with this display. "
+                "Reboot (so gsd-color recreates the default profile), then try "
+                "again."
+            )
+
+        # Persist the live id (it may have changed since last run).
+        self.config.set_baseline_id(self._device_ids[idx], profile.get_id())
         device.make_profile_default_sync(profile)
 
     # active profile ----------------------------------------------------------
     def active_profile(self, idx):
         """The current default profile (connected), or None."""
-        device = self._device(idx)
+        device = self._fresh_device(idx)
         profiles = device.get_profiles() or []
         if not profiles:
             return None
@@ -328,9 +367,9 @@ class Backend:
                 ours.append(profile)
         return ours
 
-    def _delete_profile(self, idx, profile):
+    @staticmethod
+    def _delete_profile(device, profile):
         """Deassociate (if needed) and delete an engine profile + its file."""
-        device = self._device(idx)
         fname = profile.get_filename()
         # remove the device association if present (ignore failure -- it may not
         # be associated, in which case deleting the file is enough)
@@ -349,6 +388,7 @@ class Backend:
 
         Never touches the pristine baseline (it isn't an engine profile).
         """
+        device = self._fresh_device(idx)
         protected = set(self.config.saved_filenames())
         if keep_filename:
             protected.add(keep_filename)
@@ -356,7 +396,7 @@ class Backend:
         for profile in self._all_ggt_profiles():
             if (profile.get_filename() or None) in protected:
                 continue
-            self._delete_profile(idx, profile)
+            self._delete_profile(device, profile)
             deleted += 1
         return deleted
 
@@ -367,9 +407,10 @@ class Backend:
         screen returns to pristine.
         """
         self.ensure_baseline_default(idx)
+        device = self._fresh_device(idx)
         removed = 0
         for profile in self._all_ggt_profiles():
-            self._delete_profile(idx, profile)
+            self._delete_profile(device, profile)
             removed += 1
         return removed
 
