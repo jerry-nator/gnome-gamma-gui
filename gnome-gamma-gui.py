@@ -242,13 +242,19 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_default_size(616, 720)
         self._job = None
         self._modal = None
-        self._busy_values = None  # values being applied
+        self._busy_values = None           # values being applied right now
+        self._applied_values = None        # values matching the active profile
+        self._pre_apply_values = None      # slider snapshot to revert back to
+        self._pre_apply_profile_id = None  # profile that was active before Apply
         self._device_idx = 0
+        self._ready = False
 
         self._build_actions()
         self._build_header()
         self._build_body()
         self._refresh_baseline_label()
+        self._load_active_into_sliders()
+        self._ready = True
 
     # -- construction ---------------------------------------------------------
     def _build_actions(self):
@@ -432,9 +438,20 @@ class MainWindow(Gtk.ApplicationWindow):
             self.baseline_lbl.set_label(
                 "Baseline: not yet detected — will detect on first Apply.")
 
+    def _load_active_into_sliders(self):
+        """Reflect the display's currently-active profile in the sliders."""
+        try:
+            values = self.backend.active_values(self._device_idx)
+        except Exception:
+            values = backend.neutral_values()
+        self._applied_values = values
+        self.load_values(values)
+
     def on_display_changed(self, dd, _pspec):
         self._device_idx = dd.get_selected()
         self._refresh_baseline_label()
+        if self._ready:
+            self._load_active_into_sliders()
 
     # -- apply flow -----------------------------------------------------------
     def on_apply(self, *_):
@@ -465,6 +482,13 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _start_apply(self, values):
         idx = self._device_idx
+        # Snapshot what's active right now so Revert returns *here* (undo only
+        # this Apply) rather than all the way to baseline.
+        self._pre_apply_values = backend.copy_values(
+            self._applied_values or backend.neutral_values())
+        active = self.backend.active_profile(idx)
+        self._pre_apply_profile_id = active.get_id() if active else None
+
         # Enforce the pristine baseline so the engine clones it (absolute values,
         # no stacking). A brief flash-to-neutral here is expected.
         try:
@@ -513,6 +537,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._modal = None
 
         if kept:
+            self._applied_values = backend.copy_values(self._busy_values)
             keep_file = (self._job.new_profile_filename
                          or self.backend.active_profile_filename(idx))
             try:
@@ -526,7 +551,20 @@ class MainWindow(Gtk.ApplicationWindow):
                 f"Applied and kept. (cleaned up {deleted} old profile"
                 f"{'' if deleted == 1 else 's'})")
         else:
-            self._set_status("Reverted by the engine. No changes kept.")
+            # The engine reverted to baseline + deleted the new profile. Restore
+            # the profile that was active before this Apply, so Revert undoes
+            # only this Apply's changes -- not earlier kept ones.
+            baseline = self.backend.baseline_id(idx, autodetect=False)
+            restored = False
+            if self._pre_apply_profile_id and self._pre_apply_profile_id != baseline:
+                restored = self.backend.make_profile_default_by_id(
+                    idx, self._pre_apply_profile_id)
+            self._applied_values = self._pre_apply_values or backend.neutral_values()
+            self.load_values(self._applied_values)
+            if restored:
+                self._set_status("Reverted to your previous applied settings.")
+            else:
+                self._set_status("Reverted to baseline.")
 
         self._job = None
         self._busy_values = None

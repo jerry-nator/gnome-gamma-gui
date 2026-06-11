@@ -114,6 +114,69 @@ def contrast_is_unsafe(values, eps=1e-3):
     return any(abs(c) < eps for c in values["contrast"])
 
 
+def copy_values(values):
+    """Deep-ish copy of a settings dict (channel lists copied, scalar kept)."""
+    return {
+        "gamma": list(values["gamma"]),
+        "contrast": list(values["contrast"]),
+        "brightness": list(values["brightness"]),
+        "min_brightness": list(values["min_brightness"]),
+        "temperature": values["temperature"],
+    }
+
+
+def _parse_triple(text):
+    text = text.strip()
+    if ":" in text:
+        parts = text.split(":")
+        return [float(parts[0]), float(parts[1]), float(parts[2])]
+    value = float(text)
+    return [value, value, value]
+
+
+def parse_signature(title):
+    """Reverse the engine's generate_signature() from a profile title to values.
+
+    The engine names profiles ``gamma-tool: <signature>`` where signature is a
+    compact form like ``g=0.8 t=5000 c=1:1:-1 r=[0.1,0.9]`` (only non-neutral
+    parts present). Returns a values dict (neutral for anything unspecified), or
+    ``None`` if the title isn't an engine signature / can't be parsed.
+    """
+    if not title:
+        return None
+    marker = "gamma-tool:"
+    pos = title.find(marker)
+    if pos == -1:
+        return None
+    body = title[pos + len(marker):].strip()
+    values = neutral_values()
+    if body in ("", "neutral"):
+        return values
+    try:
+        for token in body.split(" "):
+            if "=" not in token:
+                continue
+            key, _, raw = token.partition("=")
+            if key == "g":
+                values["gamma"] = _parse_triple(raw)
+            elif key == "t":
+                values["temperature"] = int(float(raw))
+            elif key == "c":
+                values["contrast"] = _parse_triple(raw)
+            elif key == "r":
+                inner = raw.strip()
+                if inner.startswith("["):
+                    inner = inner[1:]
+                if inner.endswith("]"):
+                    inner = inner[:-1]
+                bmin_s, _, bmax_s = inner.partition(",")
+                values["min_brightness"] = _parse_triple(bmin_s)
+                values["brightness"] = _parse_triple(bmax_s)
+    except (ValueError, IndexError):
+        return None
+    return values
+
+
 # --------------------------------------------------------------------------- #
 # Config persistence
 # --------------------------------------------------------------------------- #
@@ -351,6 +414,33 @@ class Backend:
     def active_profile_filename(self, idx):
         profile = self.active_profile(idx)
         return profile.get_filename() if profile else None
+
+    def active_values(self, idx):
+        """Best-effort slider values for the currently active profile.
+
+        Engine profiles encode their settings in the title, so we parse those;
+        a baseline / non-engine profile maps to neutral.
+        """
+        profile = self.active_profile(idx)
+        if profile is None or not _profile_is_ours(profile):
+            return neutral_values()
+        parsed = parse_signature(profile.get_title())
+        return parsed if parsed is not None else neutral_values()
+
+    def make_profile_default_by_id(self, idx, profile_id):
+        """Make a specific (still-existing) profile the device default.
+
+        Used to restore the pre-Apply profile on Revert. Returns True on success.
+        """
+        device = self._fresh_device(idx)
+        profile = self._find_profile_in(device, profile_id)
+        if not profile:
+            return False
+        try:
+            device.make_profile_default_sync(profile)
+            return True
+        except Exception:
+            return False
 
     # enumeration / cleanup ---------------------------------------------------
     def _all_ggt_profiles(self):
